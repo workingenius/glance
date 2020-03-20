@@ -1,3 +1,5 @@
+from typing import List
+import math
 import numpy as np
 from PIL import Image
 from matplotlib import pyplot as plt
@@ -66,38 +68,211 @@ def img_cut_rows(img):
     return sub_img_lst
 
 
-# rows that is cut from a whole image
+def img_color_border(img, color=np.array([0, 255, 0])):
+    """
+    给图片边框染上颜色
 
-def img_rows_rebuild(img_lst):
+    color 用 np.array 表示，长度为 3，分别表示 rgb  默认染为绿色
+    """
+    def bw2rgb(i):
+        """给黑白图加维度"""
+        if len(img.shape) == 2:
+            i2 = i[:, :, np.newaxis]
+            return np.concatenate([i2, i2, i2], axis=2)
+        elif len(img.shape) == 3:
+            return img.copy()
+        else:
+            raise ValueError('invalid image')
+
+    img = bw2rgb(img)
+    img[0, :] = color
+    img[-1, :] = color
+    img[:, 0] = color
+    img[:, -1] = color
+    return img
+
+
+# lines that is cut from a whole image
+
+def img_lines_rebuild(img_lst):
     """用友好的方式展示被分割成行的图片"""
     width = None
     for img in img_lst:
-        assert len(img.shape) == 2
         # 所有图片应同宽
         assert width is None or width == img.shape[1]
         if width is None:
             width = img.shape[1]
 
-    def bw2rgb(i):
-        """给黑白图加维度"""
-        i2 = i[:, :, np.newaxis]
-        return np.concatenate([i2, i2, i2], axis=2)
-
     il = []
     for img in img_lst:
-        img = bw2rgb(img)
-        # 边缘做红
-        red = np.array([255, 0, 0])
-        img[0, :] = red
-        img[-1, :] = red
-        img[:, 0] = red
-        img[:, -1] = red
+        img = img_color_border(img)
         il.append(img)
 
     ir = np.concatenate(il, axis=0)
     return ir
 
-# cat related functions
+
+def img_lines_cut_chars(img_lst):
+    """切好行的图片，每一行切出字符"""
+    ll = [Line(i) for i in img_lst]
+    start, cell_wid = ll_analyze(ll)
+
+    lines = []
+    for l in ll:
+        img_char_lst = l.cut(start=start, cell_width=cell_wid)
+        lines.append(img_char_lst)
+    return lines
+
+
+def ll_analyze(line_lst: List['Line']) -> (int, int):
+    """从各行中分析出统一的 字符起始位置 和 格子宽度"""
+    char_wid = Line.guess_char_width(line_lst)  # char width 典型的字符宽度，比格子宽度小
+
+    # 筛选出参与搜索的行
+    #   空行不参与
+    #   有宽字符的（一般是带中文的注释）不参与
+    normal_line_lst = [
+        l for l in line_lst
+        if not l.is_blank
+           and not l.has_wide_char(wider_than=char_wid * 1.5)  # 认为中文字符至少比英文字符宽 1.5 倍
+    ]
+    assert normal_line_lst, 'no normal line found'
+
+    found = False
+    phase = None
+    cycle = None
+    # 开始搜索 起始位置 和 格子宽度
+    cast0 = normal_line_lst[0].cast
+    other = [l.cast for l in normal_line_lst[1:]]
+    for ph, cy in cast_possible_pc(cast0):
+        # 如果对第一行适用的 周期相位 对其它普通也适用，则找到
+        if all(cast_pc_fits(c, phase=ph, cycle=cy) for c in other):
+            phase, cycle = ph, cy
+            found = True
+            break
+    
+    assert found, 'phase and cycle for all lines are not found'
+    return phase, cycle
+
+
+def img_chars_rebuild(img_lst_lst):
+    """切好字符的图片，拼成原图，看起来更友好"""
+
+    def rebuild_line(img_lst):
+        """从字符拼成行"""
+        img_lst = [img_color_border(i) for i in img_lst]
+        res = np.concatenate(img_lst, axis=1)
+        return res
+
+    return img_lines_rebuild([rebuild_line(il) for il in img_lst_lst])
+
+
+class Line(object):
+    """切好的一行"""
+
+    def __init__(self, img):
+        self.img = img  # np.ndarray
+        self.cast = self.calc_char_cast(img)  # np.array
+        self.span_lst = self.calc_spans(self.cast)  # np.ndarray shape=(*, 2)
+        self.span_v_lst = (self.span_lst[:, 1] - self.span_lst[:, 0])
+
+    @staticmethod
+    def guess_char_width(line_lst: List['Line']) -> int:
+        """猜一个典型的字符宽度"""
+        # 取所有字符的中位数作为猜测的字符宽度
+        #   一般中文字符（宽字符）的数量和标点的数量（窄字符）都比较少
+        #   所以掐头去尾之后，其余的就是一般英文字符内容占用的宽度
+        all_span_lst = []
+        for l in line_lst:
+            all_span_lst.append(l.span_v_lst)
+        all_span = np.concatenate(all_span_lst)
+        return int(np.median(all_span))
+
+    class Cutter(object):
+        """cut 方法的辅助类，记录切分的状态"""
+
+        def __init__(self, img):
+            self.img = img
+            self.width = img.shape[1]
+            self.pos = 0
+            self.char_img_lst = []
+
+        def cut_at(self, pos):
+            assert self.pos < pos <= self.width
+            char_img = self.img[:, range(self.pos, pos)]
+            self.char_img_lst.append(char_img)
+            self.pos = pos
+
+    def cut(self, start, cell_width):
+        """根据行起始位置 和 窄格子宽度 切出字符"""
+        assert start < cell_width
+
+        # import pdb; pdb.set_trace()
+        cutter = self.Cutter(self.img)
+
+        if start > 0:
+            cutter.cut_at(start)
+
+        # 开始交替前进框定字符，如果是空行就跳过这个步骤
+        done = not len(self.span_lst)
+        cw = cell_width
+        cur_si = 0  # cur span index
+        while not done:
+            sp_st = self.span_lst[cur_si][0]
+            sp_en = self.span_lst[cur_si][1]
+            ce_en = cutter.pos + cw
+
+            if ce_en <= sp_st:  # 空白字符
+                cutter.cut_at(ce_en)
+            elif sp_st < ce_en <= sp_en:  # 交叠，产生字符
+                cutter.cut_at(sp_en)
+            elif sp_en < ce_en:  # 合并多个图像到一个字符
+                while sp_en < ce_en:
+                    cur_si += 1
+                    if cur_si < len(self.span_lst):
+                        sp_st = self.span_lst[cur_si][0]
+                        sp_en = self.span_lst[cur_si][1]
+                    else:
+                        if sp_en > cutter.pos:
+                            cutter.cut_at(sp_en)
+                        done = True
+                        break
+
+        if cutter.pos < self.img.shape[1]:
+            cutter.cut_at(self.img.shape[1])
+
+        char_img_lst = cutter.char_img_lst
+
+        # 切分之后宽度不应发生变化
+        after_cut = sum([i.shape[1] for i in char_img_lst])
+        before_cut = self.img.shape[1]
+        assert after_cut == before_cut, 'line width changed after cut: {} != {}'.format(after_cut, before_cut)
+
+        return char_img_lst
+
+    def has_wide_char(self, wider_than) -> bool:
+        """
+        检查本行是否有宽字符
+        
+        标准是，比 wider_than 指定的阈值更宽
+        """
+        return (self.span_v_lst >= wider_than).any()
+
+    @staticmethod
+    def calc_char_cast(img_line):
+        """从 一行的图片 生成 字符投射"""
+        return img_line.sum(axis=0)
+
+    @staticmethod
+    def calc_spans(line_cast):
+        """根据 字符投射 找到内容所在的片段"""
+        return cal_ups_and_downs(line_cast)
+
+    @property
+    def is_blank(self):
+        return (self.cast == 0).all()
+
+# cast related functions
 
 
 def cast_show(cast):
@@ -106,31 +281,27 @@ def cast_show(cast):
     plt.show()
 
 
-def cast_analyze(rowcast):
-    """根据行投射分析 起始行位置 和 行高"""
-    rc = rowcast
-    assert rc.dtype == np.uint64
-    ud = cal_ups_and_downs(rowcast)
+def cast_analyze(cast):
+    """根据投射分析相位和周期"""
+    for ph, cy in cast_possible_pc(cast):
+        return ph, cy
+    else:
+        assert False, 'possible phase and cycle not found'
+
+
+def cast_possible_pc(cast):
+    """所有对 cast 来说可行的 相位和周期"""
+    assert cast.dtype == np.uint64
+    ud = cal_ups_and_downs(cast)
     spans = (ud[:, 1] - ud[:, 0])
     md = np.median(spans)
     md = int(md)
 
-    phace = None  # 相位，即起始行位置
-    cycle = None  # 周期，即行高
-    found = False
-    # 暴力搜索周期和相位
+    # 遍历 所有 周期和相位
     for phace in range(0, md * 2):
         for cycle in range(md, md * 2):
-            if cast_pc_fits(rc, phace, cycle):
-                found = True
-                break
-        if found:
-            break
-    
-    if not found:
-        raise ValueError('this case is not considered')
-
-    return phace, cycle
+            if cast_pc_fits(cast, phace, cycle):
+                yield phace, cycle
 
 
 def cast_pc_fits(cast, phase, cycle):
@@ -153,12 +324,12 @@ def cast_pc_fits(cast, phase, cycle):
     return ((bor_val[:, 0] == 0) | (bor_val[:, 1] == 0)).all()
 
 
-def cal_ups_and_downs(rowcast):
-    """根据行投射计算上行和下行，一般来说，上行和下行处都是行的边沿"""
+def cal_ups_and_downs(cast):
+    """根据 投射计算上行和下行，一般来说，上行和下行都是内容的边沿"""
 
     one = np.array([0])
 
-    rc = np.int64(rowcast)
+    rc = np.int64(cast)
     rc_right1 = np.concatenate((one, rc[:-1]))
 
     change = np.column_stack((rc_right1, rc))
