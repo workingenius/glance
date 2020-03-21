@@ -213,28 +213,38 @@ class Line(object):
         if start > 0:
             cutter.cut_at(start)
 
+        def span(i):
+            if i < len(self.span_lst):
+                return self.span_lst[i][0], self.span_lst[i][1]
+            return None, None
+
         # 开始交替前进框定字符，如果是空行就跳过这个步骤
         done = not len(self.span_lst)
         cw = cell_width
         cur_si = 0  # cur span index
         while not done:
-            sp_st = self.span_lst[cur_si][0]
-            sp_en = self.span_lst[cur_si][1]
+            sp_st, sp_en = span(cur_si)
             ce_en = cutter.pos + cw
 
             if ce_en <= sp_st:  # 空白字符
                 cutter.cut_at(ce_en)
             elif sp_st < ce_en <= sp_en:  # 交叠，产生字符
-                cutter.cut_at(sp_en)
-            elif sp_en < ce_en:  # 合并多个图像到一个字符
+                nxt_sp_st, nxt_sp_en = span(cur_si + 1)
+                if nxt_sp_st is not None:
+                    ca = (sp_en + nxt_sp_st) // 2
+                    ca = min(ca, ce_en + cw)
+                else:
+                    ca = sp_en
+                cutter.cut_at(ca)
+                
+            elif sp_en < ce_en:  # 一个或多个图像属于一个字符
                 while sp_en < ce_en:
                     cur_si += 1
                     if cur_si < len(self.span_lst):
-                        sp_st = self.span_lst[cur_si][0]
-                        sp_en = self.span_lst[cur_si][1]
+                        sp_st, sp_en = span(cur_si)
                     else:
                         if sp_en > cutter.pos:
-                            cutter.cut_at(sp_en)
+                            cutter.cut_at(ce_en)
                         done = True
                         break
 
