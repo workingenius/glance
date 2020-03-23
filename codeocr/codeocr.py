@@ -55,10 +55,12 @@ def img_cut_rows(img):
     assert start < rowhei
 
     sub_img_lst = []
-    sub_img_lst.append(
-        img[range(0, start)]
-    )
-    cur = start + rowhei
+    cur = 0
+    if start > 0:
+        sub_img_lst.append(
+            img[range(0, start)]
+        )
+        cur = start
     while cur <= len(img):
         sub_img_lst.append(
             img[range(cur, min(cur + rowhei, len(img)))]
@@ -83,7 +85,6 @@ def img_color_border(img, color=np.array([0, 255, 0])):
             return img.copy()
         else:
             raise ValueError('invalid image')
-
     img = bw2rgb(img)
     img[0, :] = color
     img[-1, :] = color
@@ -304,12 +305,12 @@ def cast_possible_pc(cast):
     assert cast.dtype == np.uint64
     ud = cal_ups_and_downs(cast)
     spans = (ud[:, 1] - ud[:, 0])
-    md = np.median(spans)
-    md = int(md)
+    mx = int(max(spans))
+    mn = int(min(spans))
 
     # 遍历 所有 周期和相位
-    for phace in range(0, md * 2):
-        for cycle in range(md, md * 2):
+    for phace in range(0, mx * 2):
+        for cycle in range(mn, mx * 2):
             if cast_pc_fits(cast, phace, cycle):
                 yield phace, cycle
 
@@ -344,18 +345,13 @@ def cal_ups_and_downs(cast):
 
     change = np.column_stack((rc_right1, rc))
 
-    width = len(rc)
-    zero_th = width // 1000  # 几乎为 0 的阈值
-    change_th = width // 10  # 发生突变的阈值
-    assert change_th > zero_th
-
     ups = np.where(
-        (change[:, 0] < zero_th)  # 起始位置几乎为 0
-        & ((change[:, 1] - change[:, 0]) > change_th)  # 发生突变
+        (change[:, 0] == 0)
+        & (change[:, 1] > 0)
     )[0]
     downs = np.where(
-        (change[:, 1] < zero_th)
-        & ((change[:, 1] - change[:, 0]) < -change_th)
+        (change[:, 1] == 0)
+        & (change[:, 0] > 0)
     )[0]
 
     # 一般情况下，上升和下降数量应该相等
