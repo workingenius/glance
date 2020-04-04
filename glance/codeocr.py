@@ -4,6 +4,8 @@ import numpy as np
 from PIL import Image
 from matplotlib import pyplot as plt
 
+from .charocr import recognize_char
+
 
 # image related function
 
@@ -361,3 +363,61 @@ def cal_ups_and_downs(cast):
 
     spans = np.column_stack((ups, downs))
     return spans
+
+
+class Char(object):
+    def __init__(self, char, lin, col):
+        self.char: str = char
+        self.lin: int = lin
+        self.col: int = col
+
+
+def recognize(img_lst) -> str:
+    """recognize codes from several images"""
+    assert len(img_lst) == 1, 'Currently only 1 image is supported'
+
+    img = img_lst[0]
+    img = img_bw(img)
+
+    chr_lst: List[Char] = cut_chars(img)
+    chr_lst = sorted(chr_lst, key=lambda x: (x.lin, x.col))
+
+    # rebuild content
+    chr_2darray = []
+    for char in chr_lst:
+        lin, col = char.lin, char.col
+        while len(chr_2darray) <= lin:
+            chr_2darray.append([])
+        line = chr_2darray[lin]
+        while len(line) <= col:
+            line.append('')
+        line[col] = char.char
+
+    # import pdb; pdb.set_trace()
+    content = '\n'.join([
+        ''.join(l)
+        for l in chr_2darray
+    ])
+    return content
+
+
+def cut_chars(img) -> List[Char]:
+    lines = img_cut_rows(img)
+    chr_img_2d = img_lines_cut_chars(lines)
+
+    char_2d = [
+        [
+            Char(
+                char=recognize_char(chr_img),
+                lin=l,
+                col=c,
+            )
+            for c, chr_img in enumerate(line)
+        ]
+        for l, line in enumerate(chr_img_2d)
+    ]
+    
+    flatten = []
+    for l in char_2d:
+        flatten.extend(l)
+    return flatten
