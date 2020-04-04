@@ -52,6 +52,8 @@ def img_rowcast(img):
 
 def img_cut_rows(img):
     """把图片切成行"""
+    img0 = img
+    img = img_bw(img)
     rc = img_rowcast(img)
     start, rowhei = cast_analyze(rc)
     assert start < rowhei
@@ -60,12 +62,12 @@ def img_cut_rows(img):
     cur = 0
     if start > 0:
         sub_img_lst.append(
-            img[range(0, start)]
+            img0[range(0, start)]
         )
         cur = start
     while cur <= len(img):
         sub_img_lst.append(
-            img[range(cur, min(cur + rowhei, len(img)))]
+            img0[range(cur, min(cur + rowhei, len(img0)))]
         )
         cur += rowhei
 
@@ -175,7 +177,9 @@ class Line(object):
 
     def __init__(self, img):
         self.img = img  # np.ndarray
-        self.cast = self.calc_char_cast(img)  # np.array
+        bw = img_bw(img)
+        self.img_bw = bw
+        self.cast = self.calc_char_cast(bw)  # np.array
         self.span_lst = self.calc_spans(self.cast)  # np.ndarray shape=(*, 2)
         self.span_v_lst = (self.span_lst[:, 1] - self.span_lst[:, 0])
 
@@ -365,11 +369,17 @@ def cal_ups_and_downs(cast):
     return spans
 
 
-class Char(object):
-    def __init__(self, char, lin, col):
-        self.char: str = char
+class Segment(object):
+    """segment cut from image"""
+
+    def __init__(self, img, lin, col):
+        self.img = img
         self.lin: int = lin
         self.col: int = col
+
+    @property
+    def char(self):
+        return recognize_char(img_bw(self.img))
 
 
 def recognize(img_lst) -> str:
@@ -377,9 +387,8 @@ def recognize(img_lst) -> str:
     assert len(img_lst) == 1, 'Currently only 1 image is supported'
 
     img = img_lst[0]
-    img = img_bw(img)
 
-    chr_lst: List[Char] = cut_chars(img)
+    chr_lst: List[Segment] = cut_segments(img)
     chr_lst = sorted(chr_lst, key=lambda x: (x.lin, x.col))
 
     # rebuild content
@@ -393,7 +402,6 @@ def recognize(img_lst) -> str:
             line.append('')
         line[col] = char.char
 
-    # import pdb; pdb.set_trace()
     content = '\n'.join([
         ''.join(l)
         for l in chr_2darray
@@ -401,14 +409,14 @@ def recognize(img_lst) -> str:
     return content
 
 
-def cut_chars(img) -> List[Char]:
+def cut_segments(img) -> List[Segment]:
     lines = img_cut_rows(img)
     chr_img_2d = img_lines_cut_chars(lines)
 
     char_2d = [
         [
-            Char(
-                char=recognize_char(chr_img),
+            Segment(
+                img=chr_img,
                 lin=l,
                 col=c,
             )
